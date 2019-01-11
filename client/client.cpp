@@ -3,14 +3,18 @@
 //
 
 #include "client.h"
+#include "hashmap.h"
 
+extern LogRec::HashMap g_hashmap;
+extern LogRec::ThreadInfo g_thread_info;
 
-KeyThreadId g_key_tid;
-ThreadInfo g_thread_info;
-std::vector<SingleThreadRecord> g_thread_record;
-Client g_client;
+LogRec::Client g_client;
 
 int main()
 {
+    g_client.Connect();
+    g_client.StartWorker();
+    g_client.SaveData();
+
 	return 0;
 }

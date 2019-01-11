@@ -9,21 +9,29 @@
 
 #define MAX_HASH    20000000
 
+namespace LogRec
+{
+
 class HashMap {
 public:
-	HashMap() {}
-	virtual ~HashMap() {}
+    HashMap() {}
 
-	void HMSET(LogRecord& log);
-	void HINCRBY(LogRecord& log);
-	void HDEL(LogRecord& log);
-	void RENAME(LogRecord& log);
-	void DEL(LogRecord& log);
+    virtual ~HashMap() {}
+
+    void HMSET(LogRecord &log);
+
+    void HINCRBY(LogRecord &log);
+
+    void HDEL(LogRecord &log);
+
+    void RENAME(LogRecord &log);
+
+    void DEL(LogRecord &log);
+
 private:
-	std::vector<KeyValue> hash_map[MAX_HASH];
+    std::vector<KeyValue> hash_map[MAX_HASH];
 };
 
-
-extern HashMap g_hashmap;
+}
 
 #endif //LOGREC_HASHMAP_H

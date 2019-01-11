@@ -10,67 +10,95 @@
 #include <vector>
 #include <pthread.h>
 
+namespace LogRec
+{
+
+
+using SARR = std::vector<std::string>;
+
 struct Field {
-	std::string field;  // TODO: maybe only filed_ID exist
-	std::string value;  // TODO: maybe only integer exist
-	bool isint;
+    std::string field;  // TODO: maybe only filed_ID exist
+    std::string value;  // TODO: maybe only integer exist
+    bool isint;
 };
 
 struct KeyValue {
-	std::string key;
-	std::vector<Field> fields;
+    std::string key;
+    std::vector<Field> fields;
 
-	void sort() {
-		//TODO: sort here
-	}
+    void sort() {
+        //TODO: sort here
+    }
 
-	void output() {
-		//TODO: call md5, and write to file
-	}
+    void output() {
+        //TODO: call md5, and write to file
+    }
+};
+
+enum OPTCODE {
+    HMSET = 0,
+    HINCRBY = 1,
+    HDEL = 2,
+    RENAME = 3,
+    DEL = 4,
+};
+
+struct LogHeader {
+    int64_t timestamp;
+    std::string opt;
+    std::string key;
 };
 
 struct LogRecord {
-	int64_t timestamp;
-	int32_t mins;
-	std::string opt;
-	std::string oldkey;
-	std::string curkey;
-	std::vector<Field> fileds;
+    int32_t mins;
+    OPTCODE code;
+    std::string oldkey;
+    std::string curkey;
+    std::vector<Field> fileds;
 };
 
 struct MinLogRecord {
-	int32_t mins;
-	std::vector<LogRecord> records;
-};
-
-struct ThreadInfo {
-	int32_t num;
-	std::vector<pthread_t> tids;
+    int32_t mins;
+    std::vector<LogRecord> records;
 };
 
 struct SingleThreadRecord {
-	int current;
-	std::vector<MinLogRecord> data; // TODO: remember remove useless data
+    int current;
+    std::vector<MinLogRecord> data; // TODO: remember remove useless data
 };
 
 struct KeyThreadId {
-	std::string key;
-	int32_t hash;
-	int32_t mins;
+    std::string key;
+    int32_t hash;
+    int32_t mins;
+};
+
+enum THREAD_STATE {
+    PARSE_DATA = 1,
+    WRITE_FILE = 2,
+    TIME2_EXIT = 3,
 };
 
 struct FileWriter {
-	FileWriter() {}
-	virtual ~FileWriter() {}
-	void AddRecord(KeyValue& kv) {}
+    FileWriter() {}
 
-	int32_t size;
-	void* addr;
+    virtual ~FileWriter() {}
+
+    void AddRecord(KeyValue &kv) {}
+
+    int32_t size;
+    void *addr;
 };
 
-extern KeyThreadId g_key_tid;
-extern ThreadInfo g_thread_info;
-extern std::vector<SingleThreadRecord> g_thread_record;
+struct ThreadInfo {
+    THREAD_STATE state;
+    int32_t num;
+    std::vector<pthread_t> tids;
+    std::vector<FileWriter> writer;
+    std::vector<SingleThreadRecord> thread_record;
+    KeyThreadId key_tids;
+};
 
+}
 
 #endif //LOGREC_HELPER_H
