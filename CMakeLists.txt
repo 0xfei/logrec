@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.1.0)
-project(logrec)
+cmake_minimum_required(VERSION 2.8.11)
+project(record)
 
 set(CMAKE_CXX_STANDARD 11)
 

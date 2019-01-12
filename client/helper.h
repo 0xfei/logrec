@@ -9,29 +9,58 @@
 #include <string>
 #include <vector>
 #include <pthread.h>
+#include <iostream>
 
 namespace LogRec
 {
 
+struct TimeUsage {
+	TimeUsage(std::string hd): header(hd) {
+		beg = clock();
+	}
+	~TimeUsage() {
+		dst = clock();
+		std::cout << header << ":" << (dst-beg)/1000 << "ms\n";
+	}
+
+	std::string header;
+	int64_t beg;
+	int64_t dst;
+};
 
 using SARR = std::vector<std::string>;
 
 struct Field {
-    std::string field;  // TODO: maybe only filed_ID exist
-    std::string value;  // TODO: maybe only integer exist
+	Field(): empty(true) {}
+	Field(std::string f, int64_t v) :
+			field(f), bvalue(v), empty(false) {}
+    std::string field;
+    std::string value;
+    int64_t bvalue;
     bool isint;
+    bool empty;
 };
 
 struct KeyValue {
+	KeyValue() : field_num(0) {}
     std::string key;
+    int32_t field_num;
     std::vector<Field> fields;
 
     void sort() {
-        //TODO: sort here
-    }
-
-    void output() {
-        //TODO: call md5, and write to file
+        for (int i = 0; i < fields.size()-1; ++i) {
+        	for (int j = i + 1; j < fields.size(); ++j) {
+        		if (fields[i].field > fields[j].field) {
+        			auto k = fields[i];
+        			fields[i] = fields[j];
+        			fields[j] = k;
+        		}
+        	}
+        }
+        field_num = 0;
+        for (int i = 0; i < fields.size(); ++i) {
+        	if (!fields[i].empty) field_num++;
+        }
     }
 };
 
@@ -43,61 +72,66 @@ enum OPTCODE {
     DEL = 4,
 };
 
-struct LogHeader {
-    int64_t timestamp;
-    std::string opt;
-    std::string key;
-};
 
 struct LogRecord {
+	LogRecord(): used_for_sub(false) { }
+	int64_t timestamp;
+	int64_t secdstamp;
     int32_t mins;
     OPTCODE code;
-    std::string oldkey;
     std::string curkey;
-    std::vector<Field> fileds;
+	std::string newkey;
+	bool used_for_sub;
+    std::vector<Field> field;
+    std::vector<size_t> sub_field;
 };
 
 struct MinLogRecord {
-    int32_t mins;
     std::vector<LogRecord> records;
 };
 
-struct SingleThreadRecord {
-    int current;
-    std::vector<MinLogRecord> data; // TODO: remember remove useless data
-};
-
-struct KeyThreadId {
-    std::string key;
-    int32_t hash;
-    int32_t mins;
-};
-
-enum THREAD_STATE {
-    PARSE_DATA = 1,
-    WRITE_FILE = 2,
-    TIME2_EXIT = 3,
-};
-
+#define FW_SIZE (512*1024*1024)
 struct FileWriter {
-    FileWriter() {}
+	FileWriter() { size = 0; }
+    void Alloc() { size = 0; addr = malloc(FW_SIZE); } // TODO: check malloc result
+    void Free() { free(addr); }
+    void AddRecord(KeyValue *kv) {
+    	kv->sort();
+    	if (kv->field_num == 0) return;
+    	MemCpy(kv->key.c_str(), kv->key.size());
+    	for (auto fi : kv->fields) {
+		    ((char*)addr)[size++] = ' ';
+		    fi.value = std::to_string(fi.bvalue);
+		    // TODO: call md5_consumer
+		    MemCpy(fi.field.c_str(), fi.field.size());
+		    ((char*)addr)[size++] = ' ';
+		    MemCpy(fi.value.c_str(), fi.value.size());
+    	}
+	    ((char*)addr)[size++] = '\n';
+    }
 
-    virtual ~FileWriter() {}
-
-    void AddRecord(KeyValue &kv) {}
+    void MemCpy(const char* str, int length) {
+		for (int i = 0; i < length; ++i) {
+			((char*)addr)[size++] = str[i];
+		}
+	}
 
     int32_t size;
     void *addr;
 };
 
 struct ThreadInfo {
-    THREAD_STATE state;
     int32_t num;
-    std::vector<pthread_t> tids;
+    pthread_t recv_tid;
+    pthread_t parse_tid;
+    pthread_t merge_tid;
+    std::vector<pthread_t> worker;
     std::vector<FileWriter> writer;
-    std::vector<SingleThreadRecord> thread_record;
-    KeyThreadId key_tids;
+	std::vector<MinLogRecord> minlog;
+	std::vector<int32_t> minlog_index;
 };
+
+extern ThreadInfo g_thread_info;
 
 }
 

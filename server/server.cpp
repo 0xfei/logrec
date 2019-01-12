@@ -6,5 +6,7 @@
 
 int main()
 {
+	Server server;
+	server.Work();
 	return 0;
 }
