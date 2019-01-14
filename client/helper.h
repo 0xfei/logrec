@@ -10,17 +10,31 @@
 #include <vector>
 #include <pthread.h>
 #include <iostream>
+#include <unistd.h>
+#include <string.h>
+
 
 namespace LogRec
 {
 
+#define MAX_HASH    16000000
+
+#define FIELD_PREFIX        "field_"
+#define FIELD_PREFIX_SIZE   6
+#define KEY_PREFIX          "OD_"
+#define KEY_PREFIX_SIZE     3
+
 struct TimeUsage {
-	TimeUsage(std::string hd): header(hd) {
+	TimeUsage(std::string hd): header(hd) { }
+
+	void Start() {
 		beg = clock();
 	}
-	~TimeUsage() {
+	void Output() {
 		dst = clock();
-		std::cout << header << ":" << (dst-beg)/1000 << "ms\n";
+		char s[100];
+		sprintf(s, "%s: %lldms\n", header.c_str(), (dst-beg)/1000);
+		write(2, s, strlen(s));
 	}
 
 	std::string header;
@@ -28,90 +42,76 @@ struct TimeUsage {
 	int64_t dst;
 };
 
-using SARR = std::vector<std::string>;
-
-struct Field {
-	Field(): empty(true) {}
-	Field(std::string f, int64_t v) :
-			field(f), bvalue(v), empty(false) {}
-    std::string field;
-    std::string value;
-    int64_t bvalue;
-    bool isint;
-    bool empty;
-};
-
 struct KeyValue {
-	KeyValue() : field_num(0) {}
-    std::string key;
+	KeyValue(): field_num(0) {}
+    int32_t key;
     int32_t field_num;
-    std::vector<Field> fields;
-
-    void sort() {
-        for (int i = 0; i < fields.size()-1; ++i) {
-        	for (int j = i + 1; j < fields.size(); ++j) {
-        		if (fields[i].field > fields[j].field) {
-        			auto k = fields[i];
-        			fields[i] = fields[j];
-        			fields[j] = k;
-        		}
-        	}
-        }
-        field_num = 0;
-        for (int i = 0; i < fields.size(); ++i) {
-        	if (!fields[i].empty) field_num++;
-        }
-    }
+    int64_t fields[101];
 };
 
 enum OPTCODE {
-    HMSET = 0,
-    HINCRBY = 1,
-    HDEL = 2,
-    RENAME = 3,
-    DEL = 4,
+    HMSET = 5,
+    HINCRBY = 7,
+    HDEL = 4,
+    RENAME = 6,
+    DEL = 3,
 };
-
 
 struct LogRecord {
-	LogRecord(): used_for_sub(false) { }
+	LogRecord() {
+		timestamp = 0;
+		field_num = 0;
+		curkey = 0;
+		newkey = 0;
+	}
 	int64_t timestamp;
-	int64_t secdstamp;
-    int32_t mins;
     OPTCODE code;
-    std::string curkey;
-	std::string newkey;
-	bool used_for_sub;
-    std::vector<Field> field;
-    std::vector<size_t> sub_field;
+    int curkey;
+	int newkey;
+	int field_num;
+	int field[5];
+	int64_t value[5];
 };
 
-struct MinLogRecord {
-    std::vector<LogRecord> records;
-};
 
 #define FW_SIZE (512*1024*1024)
 struct FileWriter {
 	FileWriter() { size = 0; }
-    void Alloc() { size = 0; addr = malloc(FW_SIZE); } // TODO: check malloc result
-    void Free() { free(addr); }
+    void Alloc() { size = 0; addr = malloc(FW_SIZE); }
+
     void AddRecord(KeyValue *kv) {
-    	kv->sort();
-    	if (kv->field_num == 0) return;
-    	MemCpy(kv->key.c_str(), kv->key.size());
-    	for (auto fi : kv->fields) {
-		    ((char*)addr)[size++] = ' ';
-		    fi.value = std::to_string(fi.bvalue);
-		    // TODO: call md5_consumer
-		    MemCpy(fi.field.c_str(), fi.field.size());
-		    ((char*)addr)[size++] = ' ';
-		    MemCpy(fi.value.c_str(), fi.value.size());
+    	std::string key(KEY_PREFIX);
+    	key = key + std::to_string(kv->key);
+    	MemCpy(key.c_str(), key.size());
+    	AddField(kv, 1);
+    	AddField(kv, 10);
+	    AddField(kv, 100);
+    	for (int i = 1; i < 10; ++i) {
+    		AddField(kv, 10 + i);
+    	}
+    	for (int i = 2; i < 10; ++i) {
+    		AddField(kv, i);
+    		for (int j = 0; j < 10; ++j) {
+    			AddField(kv, i*10 + j);
+    		}
     	}
 	    ((char*)addr)[size++] = '\n';
     }
 
+    void AddField(KeyValue *kv, int fd) {
+	    if (kv->fields[fd] <= 0) return;
+	    ((char*)addr)[size++] = ' ';
+	    std::string field(FIELD_PREFIX);
+	    field = field + std::to_string(fd);
+	    MemCpy(field.c_str(), field.size());
+	    ((char*)addr)[size++] = ' ';
+	    std::string value = std::to_string(kv->fields[fd]);
+	    // TODO: call md5_consumer
+	    MemCpy(value.c_str(), value.size());
+	}
+
     void MemCpy(const char* str, int length) {
-		for (int i = 0; i < length; ++i) {
+		for (auto i = 0; i < length; ++i) {
 			((char*)addr)[size++] = str[i];
 		}
 	}
@@ -120,18 +120,33 @@ struct FileWriter {
     void *addr;
 };
 
+
+
+enum THREAD_STATE {
+	PARSE_DATA = 1,
+	FINIS_PARS = 2,
+};
+
+#define DATA_BLOCK_SIZE (512*1024*1024)
+
 struct ThreadInfo {
     int32_t num;
     pthread_t recv_tid;
-    pthread_t parse_tid;
-    pthread_t merge_tid;
+    pthread_t exec_tid;
+	std::vector<THREAD_STATE> state;
+	std::vector<char*> data_vec;
+	std::vector<int> data_size;
     std::vector<pthread_t> worker;
     std::vector<FileWriter> writer;
-	std::vector<MinLogRecord> minlog;
-	std::vector<int32_t> minlog_index;
+	std::vector<int> tids;
 };
 
+#define TOTAL_RECORD_SIZE   210000000
+
 extern ThreadInfo g_thread_info;
+extern LogRecord* g_total_record[TOTAL_RECORD_SIZE];
+extern int64_t g_basic_stamp;
+extern int64_t g_final_stamp;
 
 }
 

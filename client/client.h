@@ -5,7 +5,6 @@
 #ifndef LOGREC_CLIENT_H
 #define LOGREC_CLIENT_H
 
-#include "parser.h"
 #include <fstream>
 #include <iostream>
 #include <unistd.h>

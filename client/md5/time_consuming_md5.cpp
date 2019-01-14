@@ -9,7 +9,7 @@
 
 std::string time_consuming_md5(const std::string& str) {
     std::string strdup;
-    for (int j = 0; j < 60; ++j) {
+    for (auto j = 0; j < 60; ++j) {
         strdup = strdup.append(str);
     }
     MD5 str_md5(strdup);
@@ -19,7 +19,7 @@ std::string time_consuming_md5(const std::string& str) {
 /*
 std::string time_consuming_md5(const std::string& str) {
     std::string strdup;
-    for (int j = 0; j < 60; ++j) {
+    for (auto j = 0; j < 60; ++j) {
         strdup = strdup.append(str);
     }
     return CMd5Hashid::hash_str(strdup.c_str(), strdup.length());

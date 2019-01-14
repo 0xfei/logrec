@@ -4,9 +4,9 @@
 
 #include "helper.h"
 #include "worker.h"
-#include "parser.h"
 #include "hashmap.h"
 
+#include <string.h>
 #include <fstream>
 #include <unistd.h>
 #include <errno.h>
@@ -24,18 +24,16 @@ namespace LogRec
 #define BLOCK_SIZE  (1024*1024)
 
 char g_buffer[BLOCK_SIZE] = {0};
-std::vector<void*> g_data_vec;
-std::vector<int> g_data_vec_size;
+char g_prev_buffer[BLOCK_SIZE] = {0};
+char g_curr_buffer[BLOCK_SIZE*2] = {0};
 
-bool g_reciver_finish = false;
-bool g_parsed_finish = false;
-bool g_merged_finish = false;
-
-Parser g_parser_manager;
-
+bool g_execcuted = false;
 int g_client_fd;
 
 
+/*
+ * connect helper
+ */
 void LoadIpPort(std::string& ip, int& port)
 {
 	std::ifstream conf("client.conf");
@@ -52,10 +50,7 @@ void Connect()
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
 	addr.sin_addr.s_addr=inet_addr(ip.c_str());
-
 	g_client_fd = socket(PF_INET, SOCK_STREAM, 0);
-	//int flags = fcntl(g_client_fd, F_GETFL, 0);
-	//fcntl(g_client_fd, F_SETFL, flags|O_NONBLOCK);
 
 	int ret = connect(g_client_fd, (struct sockaddr*)&addr, sizeof(addr));
 	if (ret == -1) {
@@ -63,94 +58,194 @@ void Connect()
 	}
 }
 
-
+/*
+ * recv data from server
+ */
 void* Reciver(void* param)
 {
-	CORE_BIND(0);
-
+	CORE_BIND(1);
 	TimeUsage tm("ReciverUsage");
-	int nopcount = 0;
+	tm.Start();
 	Connect();
 
-	ssize_t nsize;
+	int count = 0;
+	ssize_t nsize, prev_size = 0, point = 0;
 	while ((nsize = recv(g_client_fd, (void*)g_buffer, BLOCK_SIZE, 0)) != 0) {
-		if (nsize == 0) {
-			break;
+		if (g_basic_stamp == 0) {
+			for (int i = 0; i < nsize; ++i) {
+				if (g_buffer[i] == ' ') break;
+				g_basic_stamp = g_basic_stamp*10 + (g_buffer[i] - '0');
+			}
+			g_basic_stamp = g_basic_stamp - 10000;
+			std::cout << g_basic_stamp << std::endl;
+		}
+		if (nsize == 0) break;
+		int temp_size = nsize;
+		for (point = nsize-1; point >=0; --point) {
+			if (g_buffer[point] == '\n') break;
+		}
+		if (prev_size != 0) {
+			memcpy(g_curr_buffer, g_prev_buffer, prev_size);
+			memcpy(g_curr_buffer + prev_size, g_buffer, point+1);
+			nsize = point + 1 + prev_size;
 		} else {
-			void* data = malloc(nsize);
-			memcpy(data, g_buffer, nsize);
-			g_data_vec.push_back(data);
-			g_data_vec_size.push_back(nsize);
+			nsize = point + 1;
+			memcpy(g_curr_buffer, g_buffer, nsize);
 		}
+		prev_size = temp_size - point - 1;
+		for (int i = point+1; i < temp_size; ++i) {
+			g_prev_buffer[i-point-1] = g_buffer[i];
+		}
+
+		int tid = (count / 350) % g_thread_info.num;
+		if (tid != 0) {
+			tid = tid;
+		}
+		int old_size = g_thread_info.data_size[tid];
+		memcpy(g_thread_info.data_vec[tid] + old_size, g_curr_buffer, nsize);
+		g_thread_info.data_size[tid] = old_size + nsize;
+		count++;
 	}
-	g_reciver_finish = true;
 	close(g_client_fd);
+	tm.Output();
 	return NULL;
 }
 
-void* Modifier(void* param)
-{
-	CORE_BIND(1);
-
-	TimeUsage tm("ModifierUsage");
-	int  data_index = 0;
-	std::string log_record;
-	while (true) {
-		if (data_index == g_data_vec.size()) {
-			if (g_reciver_finish) {
-				break;
-			}
-			usleep(USECONDS);
-			continue;
-		}
-		char* current_point = (char*)g_data_vec[data_index];
-		int current_size = g_data_vec_size[data_index];
-		for (int i = 0; i < current_size; ++i) {
-			if (current_point[i] == 0) break;
-			if (current_point[i] == '\n') {
-				g_parser_manager.Parse(log_record);
-				log_record = "";
-			} else {
-				log_record = log_record + current_point[i];
-			}
-		}
-		free(g_data_vec[data_index]);
-		data_index++;
+/*
+ * Parser
+ */
+inline int64_t ParseTimestmp(int& j, char* addr) {
+	int64_t timestamp = 0;
+	while (addr[j] != ' ') {
+		timestamp = timestamp*10 - '0' + addr[j++];
 	}
-	if (log_record != "") g_parser_manager.Parse(log_record);
-	g_parser_manager.AddLastIndex();
-	g_parsed_finish = true;
-
-	return NULL;
+	j++;
+	return timestamp;
 }
 
-
-void MergeData(MinLogRecord& minlog);
-
-void* Merger(void* param)
-{
-	CORE_BIND(2);
-
-	TimeUsage tm("MergerITEM");
-	int log_index = 0;
-	while (true) {
-		if (log_index == g_thread_info.minlog_index.size()) {
-			if (g_parsed_finish) {
-				break;
-			}
-			usleep(USECONDS*10);
-			continue;
-		}
-		int now = g_thread_info.minlog_index[log_index];
-		MergeData(g_thread_info.minlog[now]);
-		// g_thread_info.minlog[log_index].records.clear();
-		log_index++;
+inline OPTCODE ParseOptcode(int& j, char* addr) {
+	int len = 0;
+	while (addr[j] != ' ') {
+		len++; j++;
 	}
-
-	g_merged_finish = true;
-
-	return NULL;
+	j++;
+	return (OPTCODE)len;
 }
+
+inline bool NotODStart(int& j, char* addr)
+{
+	if (addr[j] != 'O') {
+		while (addr[j] != '\n') j++;
+		j++;
+		return true;
+	}
+	return false;
+}
+
+inline void ParseCurKey(LogRecord* record, int& j, char* addr)
+{
+	j += KEY_PREFIX_SIZE;
+	while (addr[j] != ' ' && addr[j] != '\n') {
+		record->curkey = record->curkey*10 - '0' + addr[j++];
+	}
+	j++;
+}
+
+inline void ParseHDEL(LogRecord* record, int& j, char* addr)
+{
+	while (true) {
+		j += FIELD_PREFIX_SIZE;
+		int fd = 0;
+		while (addr[j] != ' ' && addr[j] != '\n') {
+			fd = fd*10 - '0' + addr[j++];
+		}
+		record->field[record->field_num++] = fd;
+		if (addr[j] == ' ') j++;
+		else { j++; break; }
+	}
+}
+
+inline void ParseHMSET(LogRecord* record, int& j, char* addr)
+{
+	while (true) {
+		j += FIELD_PREFIX_SIZE;
+		int field = 0; int64_t value = 0;
+		while (addr[j] != ' ') {
+			field = field*10 - '0' + addr[j++];
+		}
+		j++;
+		record->field[record->field_num] = field;
+		while (addr[j] != ' ' && addr[j] != '\n') {
+			value = value*10 - '0' + addr[j++];
+		}
+		record->value[record->field_num++] = value;
+		if (addr[j] == ' ') j++;
+		else { j++; break; }
+	}
+}
+
+inline void ParseRENAME(LogRecord* record, int& j, char* addr)
+{
+	j += KEY_PREFIX_SIZE;
+	while (addr[j] != '\n') {
+		record->newkey = record->newkey*10 - '0' + addr[j++];
+	}
+	j++;
+}
+
+inline void ParseHINCRBY(LogRecord* record, int& j, char* addr)
+{
+	j += FIELD_PREFIX_SIZE;
+	int field = 0; int64_t value = 0;
+	while (addr[j] != ' ') {
+		field = field*10 - '0' + addr[j++];
+	}
+	j++;
+	record->field[record->field_num] = field;
+	while (addr[j] != ' ' && addr[j] != '\n') {
+		value = value*10 - '0' + addr[j++];
+	}
+	record->value[record->field_num++] = value;
+	j++;
+}
+
+void Modifier(int tid)
+{
+	TimeUsage tm(std::to_string(tid)+"#Modifier");
+	tm.Start();
+	char* addr = g_thread_info.data_vec[tid];
+	int addr_size = g_thread_info.data_size[tid];
+	int j = 0;
+	while (j < addr_size) {
+		auto timestamp = ParseTimestmp(j, addr);
+		auto optcode = ParseOptcode(j, addr);
+		if (NotODStart(j, addr)) continue;
+		LogRecord* record = new LogRecord;
+		record->timestamp = timestamp;
+		record->code = optcode;
+		ParseCurKey(record, j, addr);
+		switch (record->code) {
+			case HDEL:
+				ParseHDEL(record, j, addr);
+				break;
+			case HMSET:
+				ParseHMSET(record, j, addr);
+				break;
+			case RENAME:
+				ParseRENAME(record, j, addr);
+				break;
+			case HINCRBY:
+				ParseHINCRBY(record, j, addr);
+				break;
+			default:
+				break;
+		}
+		g_total_record[timestamp-g_basic_stamp] = record;
+		if (timestamp > g_final_stamp) g_final_stamp = timestamp;
+	}
+	tm.Output();
+}
+
 
 /*
  * Hash worker
@@ -160,8 +255,9 @@ const int g_worker_slut_size = 14;
 
 inline void AddToHashmap(int key, int tid)
 {
-	auto k = g_hashmap.hash_map[key];
-	if (k != NULL && k->fields.size() > 0) {
+	auto & k = g_hashmap.hash_map[key];
+	if (k != NULL && k->field_num > 0) {
+		k->key = key;
 		g_thread_info.writer[tid].AddRecord(k);
 	}
 }
@@ -169,80 +265,86 @@ inline void AddToHashmap(int key, int tid)
 void DFSAddHash(int slut, int tid)
 {
 	if (slut*10 > MAX_HASH) return;
-	for (int i = 0; i < 10; ++i) {
+	for (auto i = 0; i < 10; ++i) {
 		auto key = slut*10 + i;
 		AddToHashmap(key, tid);
 		DFSAddHash(key, tid);
 	}
 }
 
-void* Worker(void* param)
+void AddFileWriter(int tid)
 {
-	int tid = *(int*)param;
-	CORE_BIND(tid);
-	tid = tid - 3;
-
-	TimeUsage tm(std::to_string(tid)+"#Worker");
-
-	while (!g_merged_finish) {
-		usleep(USECONDS);
-	}
-
 	g_thread_info.writer[tid].Alloc();
-
 	if (tid == 0) AddToHashmap(1, tid);
 	int slut = g_worker_slut[tid];
 	AddToHashmap(slut, tid);
 	DFSAddHash(slut, tid);
+}
 
+/*
+ * Worker thread
+ */
+void* Worker(void* param)
+{
+	int tid = *((int*)param);
+	CORE_BIND(tid+1);
+
+	Modifier(tid);
+	g_thread_info.state[tid] = FINIS_PARS;
+
+	while (!g_execcuted) {
+		usleep(USECONDS);
+	}
+
+	TimeUsage tm(std::to_string(tid)+"#AddFileWriter");
+	tm.Start();
+
+	if (tid < g_worker_slut_size) AddFileWriter(tid);
+
+	tm.Output();
 	return NULL;
 }
 
-
 /*
- * internal function
+ * Executer thread
  */
-void MergeData(MinLogRecord& minlog)
+void* Executer(void* param)
 {
-	int64_t prev_time = 0;
-	/*
-	for (size_t i = 0; i < minlog.records.size(); ++i) {
-		if (minlog.records[i].timestamp < prev_time) {
-			int64_t now_stamp = minlog.records[i].timestamp;
-			int s = 0, t = i-1, mid = i/2;
-			minlog.records[i].used_for_sub = true;
-			minlog.records[i].secdstamp = now_stamp;
-			minlog.records[i].timestamp = prev_time;
-			while (s < t + 1) {
-				if (minlog.records[mid].timestamp > now_stamp) {
-					t = mid - 1;
-				} else {
-					s = mid + 1;
-				}
-				mid = (s+t+1)/2;
-			}
-			minlog.records[s].sub_field.push_back(i);
-			int num = minlog.records[s].sub_field.size();
-			int poi, cur_poi = num - 1;
-			for (poi = num-2; poi >= 0; --poi) {
-				auto sec_time_index = minlog.records[s].sub_field[poi];
-				auto sec_time = minlog.records[sec_time_index].timestamp;
-				if (sec_time > now_stamp) {
-					minlog.records[s].sub_field[poi+1] = sec_time_index;
-					cur_poi = poi;
-				}
-			}
-			minlog.records[s].sub_field[cur_poi] = i;
-		} else {
-			prev_time = minlog.records[i].timestamp;
-		}
-	}*/
+	CORE_BIND(0);
+	{
+		TimeUsage allocer("Allocer");
+		allocer.Start();
 
-	for (auto k : minlog.records) {
-		if (k.used_for_sub) continue;
-		for (auto sub : k.sub_field) g_hashmap.ModifyHash(minlog.records[sub]);
-		g_hashmap.ModifyHash(k);
+		KeyValue* kvarray = (KeyValue*)malloc(sizeof(KeyValue)*MAX_HASH);
+		for (int i = 1; i < MAX_HASH; ++i) {
+			g_hashmap.hash_map[i] = &kvarray[i];
+		}
+		allocer.Output();
 	}
+
+	while (true) {
+		bool finish = true;
+		for (int i = 0; i < g_thread_info.num; ++i) {
+			if (g_thread_info.state[i] != FINIS_PARS) {
+				finish = false;
+				break;
+			}
+		}
+		if (finish) break;
+		else usleep(USECONDS);
+	}
+
+	TimeUsage tm("Executer");
+	tm.Start();
+
+	for (int i = 0; i < TOTAL_RECORD_SIZE; ++i) {
+		if (g_total_record[i] != NULL) {
+			g_hashmap.ModifyHash(g_total_record[i]);
+		}
+	}
+	g_execcuted = true;
+	tm.Output();
+	return NULL;
 }
 
 }
