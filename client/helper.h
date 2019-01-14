@@ -12,7 +12,7 @@
 #include <iostream>
 #include <unistd.h>
 #include <string.h>
-
+#include <sys/time.h>
 
 namespace LogRec
 {
@@ -28,16 +28,22 @@ struct TimeUsage {
 	TimeUsage(std::string hd): header(hd) { }
 
 	void Start() {
-		beg = clock();
+		beg = GetTime();
 	}
 	void Output() {
-		dst = clock();
-		char s[100];
-		sprintf(s, "%s: %lldms\n", header.c_str(), (dst-beg)/1000);
+		dst = GetTime();
+		sprintf(s, "%s: %lldms\n", header.c_str(), dst-beg);
 		write(2, s, strlen(s));
 	}
 
+	int64_t GetTime() {
+		struct timeval tv;
+		gettimeofday(&tv,NULL);
+		return tv.tv_sec*1000 + tv.tv_usec/1000;
+	}
+
 	std::string header;
+	char s[100];
 	int64_t beg;
 	int64_t dst;
 };
@@ -76,8 +82,7 @@ struct LogRecord {
 
 #define FW_SIZE (512*1024*1024)
 struct FileWriter {
-	FileWriter() { size = 0; }
-    void Alloc() { size = 0; addr = malloc(FW_SIZE); }
+	FileWriter() { size = 0; addr = malloc(FW_SIZE); }
 
     void AddRecord(KeyValue *kv) {
     	std::string key(KEY_PREFIX);
@@ -127,7 +132,7 @@ enum THREAD_STATE {
 	FINIS_PARS = 2,
 };
 
-#define DATA_BLOCK_SIZE (512*1024*1024)
+#define DATA_BLOCK_SIZE (1024*1024*1024)
 
 struct ThreadInfo {
     int32_t num;
@@ -144,9 +149,6 @@ struct ThreadInfo {
 #define TOTAL_RECORD_SIZE   210000000
 
 extern ThreadInfo g_thread_info;
-extern LogRecord* g_total_record[TOTAL_RECORD_SIZE];
-extern int64_t g_basic_stamp;
-extern int64_t g_final_stamp;
 
 }
 

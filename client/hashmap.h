@@ -17,7 +17,7 @@ public:
     virtual ~HashMap() {}
 
     void ModifyHash(LogRecord* record) {
-	    KeyValue* key_data = FindHash(record->curkey);
+	    KeyValue* key_data = hash_map[record->curkey];
     	switch (record->code) {
 		    case DEL:
 		    	for (int i = 0; i <= 100; ++i) {
@@ -37,22 +37,13 @@ public:
     	}
     }
 
-    void CreateHash(int key) {
-	    KeyValue* new_kv = new KeyValue;
-	    hash_map[key] = new_kv;
-	    new_kv->key = key;
-    }
-
 	KeyValue* hash_map[MAX_HASH];
 
 private:
-	KeyValue* FindHash(int hash) {
-		return hash_map[hash];
-	}
-
     void RenameHash(int cur_hash, int new_hash) {
+		if (cur_hash == new_hash) return;
     	KeyValue* cur_data = hash_map[cur_hash];
-    	if (cur_data == NULL) return;
+    	if (cur_data->field_num == 0) return;
     	hash_map[cur_hash] = hash_map[new_hash];
     	hash_map[new_hash] = cur_data;
 

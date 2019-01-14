@@ -21,17 +21,11 @@ int main()
 namespace LogRec
 {
 
-LogRecord* g_total_record[TOTAL_RECORD_SIZE];
-int64_t g_basic_stamp;
-int64_t g_final_stamp;
-
-HashMap g_hashmap;
 ThreadInfo g_thread_info;
 
 int Client::StartWorker()
 {
 	g_thread_info.num = sysconf(_SC_NPROCESSORS_ONLN) - 1;
-	std::cout << "ThreadNum: " << g_thread_info.num << std::endl;
 	for (auto i = 0; i < g_thread_info.num; ++i) {
 		g_thread_info.state.push_back(PARSE_DATA);
 		g_thread_info.data_vec.push_back((char*)malloc(DATA_BLOCK_SIZE));
@@ -41,7 +35,6 @@ int Client::StartWorker()
 	}
 
 	pthread_create(&g_thread_info.recv_tid, NULL, Reciver, NULL);
-	pthread_join(g_thread_info.recv_tid, NULL);
 
 	for (auto i = 0; i < g_thread_info.num; ++i) {
 		pthread_t thread;
@@ -55,10 +48,11 @@ int Client::StartWorker()
 
 int Client::SaveData()
 {
+	pthread_join(g_thread_info.recv_tid, NULL);
 	pthread_join(g_thread_info.exec_tid, NULL);
 
-	for (auto t : g_thread_info.worker) {
-		pthread_join(t, NULL);
+	for (int i = g_thread_info.num-1; i >= 0; --i) {
+		pthread_join(g_thread_info.worker[i], NULL);
 	}
 
 	for (auto k : g_thread_info.writer) {

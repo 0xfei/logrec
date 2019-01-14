@@ -23,49 +23,31 @@ namespace LogRec
 #define USECONDS    10000
 #define BLOCK_SIZE  (1024*1024)
 
+bool g_recivered = false;
+bool g_execcuted = false;
+bool g_parsedeng = false;
+
 char g_buffer[BLOCK_SIZE] = {0};
 char g_prev_buffer[BLOCK_SIZE] = {0};
 char g_curr_buffer[BLOCK_SIZE*2] = {0};
 
-bool g_execcuted = false;
+HashMap g_hashmap;
+
+int64_t g_basic_stamp;
+LogRecord* g_total_record[TOTAL_RECORD_SIZE];
+
 int g_client_fd;
 
 
 /*
- * connect helper
- */
-void LoadIpPort(std::string& ip, int& port)
-{
-	std::ifstream conf("client.conf");
-	conf >> ip >> port;
-	conf.close();
-}
-
-void Connect()
-{
-	std::string ip; int port;
-	LoadIpPort(ip, port);
-
-	struct sockaddr_in addr = {0};
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(port);
-	addr.sin_addr.s_addr=inet_addr(ip.c_str());
-	g_client_fd = socket(PF_INET, SOCK_STREAM, 0);
-
-	int ret = connect(g_client_fd, (struct sockaddr*)&addr, sizeof(addr));
-	if (ret == -1) {
-		exit(-1);
-	}
-}
-
-/*
  * recv data from server
  */
+void Connect();
+
 void* Reciver(void* param)
 {
 	CORE_BIND(1);
-	TimeUsage tm("ReciverUsage");
-	tm.Start();
+	TimeUsage tm("ReciverUsage"); tm.Start();
 	Connect();
 
 	int count = 0;
@@ -76,8 +58,7 @@ void* Reciver(void* param)
 				if (g_buffer[i] == ' ') break;
 				g_basic_stamp = g_basic_stamp*10 + (g_buffer[i] - '0');
 			}
-			g_basic_stamp = g_basic_stamp - 10000;
-			std::cout << g_basic_stamp << std::endl;
+			g_basic_stamp = g_basic_stamp - 100;
 		}
 		if (nsize == 0) break;
 		int temp_size = nsize;
@@ -97,19 +78,128 @@ void* Reciver(void* param)
 			g_prev_buffer[i-point-1] = g_buffer[i];
 		}
 
-		int tid = (count / 350) % g_thread_info.num;
-		if (tid != 0) {
-			tid = tid;
-		}
+		int tid = count % g_thread_info.num;
 		int old_size = g_thread_info.data_size[tid];
 		memcpy(g_thread_info.data_vec[tid] + old_size, g_curr_buffer, nsize);
 		g_thread_info.data_size[tid] = old_size + nsize;
 		count++;
 	}
 	close(g_client_fd);
+	g_recivered = true;
 	tm.Output();
 	return NULL;
 }
+
+
+/*
+ * Worker thread
+ */
+const int g_worker_slut[] = {10, 10, 11, 11, 12, 12, 13, 13, 14, 14,
+							 15, 15, 16, 16, 17, 17, 18, 18, 19, 19,
+							 2, 2, 3, 3, 4, 4, 5, 5,
+							 6, 6, 7, 7, 8, 8, 9, 9};
+
+const int g_worker_slut_size = sizeof(g_worker_slut)/sizeof(int);
+
+void AddFileWriter(int tid);
+void ParseCommand(int tid);
+
+void* Worker(void* param)
+{
+	int tid = *((int*)param);
+	CORE_BIND(tid+1);
+
+	ParseCommand(tid);
+	g_thread_info.state[tid] = FINIS_PARS;
+
+	while (!g_execcuted) {
+		usleep(USECONDS);
+	}
+
+	TimeUsage tm(std::to_string(tid)+"#AddFileWriter");
+	tm.Start();
+
+	if (tid < g_worker_slut_size) AddFileWriter(tid);
+
+	tm.Output();
+	return NULL;
+}
+
+
+/*
+ * Executer thread
+ */
+void* Executer(void* param)
+{
+	CORE_BIND(0);
+	{
+		TimeUsage allocer("Allocer");
+		allocer.Start();
+
+		KeyValue* kvarray = (KeyValue*)malloc(sizeof(KeyValue)*MAX_HASH);
+		for (int i = 1; i < MAX_HASH; ++i) {
+			g_hashmap.hash_map[i] = &kvarray[i];
+		}
+		allocer.Output();
+	}
+
+	while (!g_parsedeng) {
+		usleep(USECONDS);
+	}
+
+	TimeUsage tm("Executer");
+	tm.Start();
+
+	for (int i = 0; i < TOTAL_RECORD_SIZE; ++i) {
+		if (g_total_record[i] != NULL) {
+			g_hashmap.ModifyHash(g_total_record[i]);
+		}
+	}
+	g_execcuted = true;
+	tm.Output();
+	return NULL;
+}
+
+
+/*
+ * Hash worker
+ */
+inline void AddToHashmap(int key, int tid)
+{
+	auto & k = g_hashmap.hash_map[key];
+	if (k != NULL && k->field_num > 0) {
+		k->key = key;
+		g_thread_info.writer[tid].AddRecord(k);
+	}
+}
+
+void DFSAddHash(int slut, int tid)
+{
+	int s = 0, t = 10;
+	if (slut < 20) {
+		if (tid % 2 == 1) {
+			s = 5, t = 10;
+		} else {
+			s = 0, t = 5;
+		}
+	}
+
+	for (auto i = s; i < t; ++i) {
+		auto key = slut*10 + i;
+		if (key >= MAX_HASH) break;
+		AddToHashmap(key, tid);
+		DFSAddHash(key, tid);
+	}
+}
+
+void AddFileWriter(int tid)
+{
+	if (tid == 0) AddToHashmap(1, tid);
+	int slut = g_worker_slut[tid];
+	if (tid % 2 == 0) AddToHashmap(slut, tid);
+	DFSAddHash(slut, tid);
+}
+
 
 /*
  * Parser
@@ -209,142 +299,79 @@ inline void ParseHINCRBY(LogRecord* record, int& j, char* addr)
 	j++;
 }
 
-void Modifier(int tid)
+
+/*
+ * parse command
+ */
+void ParseCommand(int tid)
 {
-	TimeUsage tm(std::to_string(tid)+"#Modifier");
+	TimeUsage tm(std::to_string(tid)+"#ParseCommand");
 	tm.Start();
+	int j = 0;
 	char* addr = g_thread_info.data_vec[tid];
 	int addr_size = g_thread_info.data_size[tid];
-	int j = 0;
-	while (j < addr_size) {
-		auto timestamp = ParseTimestmp(j, addr);
-		auto optcode = ParseOptcode(j, addr);
-		if (NotODStart(j, addr)) continue;
-		LogRecord* record = new LogRecord;
-		record->timestamp = timestamp;
-		record->code = optcode;
-		ParseCurKey(record, j, addr);
-		switch (record->code) {
-			case HDEL:
-				ParseHDEL(record, j, addr);
-				break;
-			case HMSET:
-				ParseHMSET(record, j, addr);
-				break;
-			case RENAME:
-				ParseRENAME(record, j, addr);
-				break;
-			case HINCRBY:
-				ParseHINCRBY(record, j, addr);
-				break;
-			default:
-				break;
-		}
-		g_total_record[timestamp-g_basic_stamp] = record;
-		if (timestamp > g_final_stamp) g_final_stamp = timestamp;
-	}
-	tm.Output();
-}
-
-
-/*
- * Hash worker
- */
-const int g_worker_slut[] = {10, 11, 12, 13, 14, 15, 2, 3, 4, 5, 6, 7, 8, 9};
-const int g_worker_slut_size = 14;
-
-inline void AddToHashmap(int key, int tid)
-{
-	auto & k = g_hashmap.hash_map[key];
-	if (k != NULL && k->field_num > 0) {
-		k->key = key;
-		g_thread_info.writer[tid].AddRecord(k);
-	}
-}
-
-void DFSAddHash(int slut, int tid)
-{
-	if (slut*10 > MAX_HASH) return;
-	for (auto i = 0; i < 10; ++i) {
-		auto key = slut*10 + i;
-		AddToHashmap(key, tid);
-		DFSAddHash(key, tid);
-	}
-}
-
-void AddFileWriter(int tid)
-{
-	g_thread_info.writer[tid].Alloc();
-	if (tid == 0) AddToHashmap(1, tid);
-	int slut = g_worker_slut[tid];
-	AddToHashmap(slut, tid);
-	DFSAddHash(slut, tid);
-}
-
-/*
- * Worker thread
- */
-void* Worker(void* param)
-{
-	int tid = *((int*)param);
-	CORE_BIND(tid+1);
-
-	Modifier(tid);
-	g_thread_info.state[tid] = FINIS_PARS;
-
-	while (!g_execcuted) {
-		usleep(USECONDS);
-	}
-
-	TimeUsage tm(std::to_string(tid)+"#AddFileWriter");
-	tm.Start();
-
-	if (tid < g_worker_slut_size) AddFileWriter(tid);
-
-	tm.Output();
-	return NULL;
-}
-
-/*
- * Executer thread
- */
-void* Executer(void* param)
-{
-	CORE_BIND(0);
-	{
-		TimeUsage allocer("Allocer");
-		allocer.Start();
-
-		KeyValue* kvarray = (KeyValue*)malloc(sizeof(KeyValue)*MAX_HASH);
-		for (int i = 1; i < MAX_HASH; ++i) {
-			g_hashmap.hash_map[i] = &kvarray[i];
-		}
-		allocer.Output();
-	}
-
 	while (true) {
-		bool finish = true;
-		for (int i = 0; i < g_thread_info.num; ++i) {
-			if (g_thread_info.state[i] != FINIS_PARS) {
-				finish = false;
-				break;
+		while (addr_size - j <= 100 && !g_recivered) {
+			usleep(USECONDS);
+			addr_size = g_thread_info.data_size[tid];
+		}
+		if (g_recivered && j == addr_size) break;
+		while (j < addr_size) {
+			auto timestamp = ParseTimestmp(j, addr);
+			auto optcode = ParseOptcode(j, addr);
+			if (NotODStart(j, addr)) continue;
+			LogRecord* record = new LogRecord;
+			record->timestamp = timestamp;
+			record->code = optcode;
+			ParseCurKey(record, j, addr);
+			switch (record->code) {
+				case HDEL:
+					ParseHDEL(record, j, addr);
+					break;
+				case HMSET:
+					ParseHMSET(record, j, addr);
+					break;
+				case RENAME:
+					ParseRENAME(record, j, addr);
+					break;
+				case HINCRBY:
+					ParseHINCRBY(record, j, addr);
+					break;
+				default:
+					break;
 			}
-		}
-		if (finish) break;
-		else usleep(USECONDS);
-	}
-
-	TimeUsage tm("Executer");
-	tm.Start();
-
-	for (int i = 0; i < TOTAL_RECORD_SIZE; ++i) {
-		if (g_total_record[i] != NULL) {
-			g_hashmap.ModifyHash(g_total_record[i]);
+			g_total_record[timestamp-g_basic_stamp] = record;
+			if (timestamp - g_basic_stamp > 60*1000*1000) g_parsedeng = true;
 		}
 	}
-	g_execcuted = true;
 	tm.Output();
-	return NULL;
+}
+
+/*
+ * connect helper
+ */
+inline void LoadIpPort(std::string& ip, int& port)
+{
+	std::ifstream conf("client.conf");
+	conf >> ip >> port;
+	conf.close();
+}
+
+void Connect()
+{
+	std::string ip; int port;
+	LoadIpPort(ip, port);
+
+	struct sockaddr_in addr = {0};
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(port);
+	addr.sin_addr.s_addr=inet_addr(ip.c_str());
+	g_client_fd = socket(PF_INET, SOCK_STREAM, 0);
+
+	int ret = connect(g_client_fd, (struct sockaddr*)&addr, sizeof(addr));
+	if (ret == -1) {
+		exit(-1);
+	}
 }
 
 }
