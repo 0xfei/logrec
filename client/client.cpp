@@ -6,38 +6,42 @@
 #include "hashmap.h"
 #include "worker.h"
 
-
 LogRec::Client g_client;
 
 int main()
 {
+	LogRec::TimeUsage tm("TotalUsage:");
+	tm.Start();
 	g_client.StartWorker();
 	g_client.SaveData();
+	tm.Output();
 	return 0;
 }
-
 
 namespace LogRec
 {
 
-HashMap g_hashmap;
 ThreadInfo g_thread_info;
 
 int Client::StartWorker()
 {
-	g_thread_info.num = 1;
+	g_thread_info.num = sysconf(_SC_NPROCESSORS_ONLN) - 1;
+	for (auto i = 0; i < g_thread_info.num; ++i) {
+		g_thread_info.state.push_back(PARSE_DATA);
+		g_thread_info.data_vec.push_back((char*)malloc(DATA_BLOCK_SIZE));
+		g_thread_info.data_size.push_back(0);
+		g_thread_info.writer.push_back(FileWriter());
+		g_thread_info.tids.push_back(i);
+	}
 
 	pthread_create(&g_thread_info.recv_tid, NULL, Reciver, NULL);
-	pthread_create(&g_thread_info.parse_tid, NULL, Modifier, NULL);
-	pthread_create(&g_thread_info.merge_tid, NULL, Merger, NULL);
 
-	for (int i = 0; i < g_thread_info.num; ++i) {
-		int tid = i + 3;
+	for (auto i = 0; i < g_thread_info.num; ++i) {
 		pthread_t thread;
-		pthread_create(&thread, NULL, Worker, (void*)&tid);
+		pthread_create(&thread, NULL, Worker, (void *)&g_thread_info.tids[i]);
 		g_thread_info.worker.push_back(thread);
-		g_thread_info.writer.push_back(FileWriter());
 	}
+	pthread_create(&g_thread_info.exec_tid, NULL, Executer, NULL);
 
 	return 0;
 }
@@ -45,11 +49,10 @@ int Client::StartWorker()
 int Client::SaveData()
 {
 	pthread_join(g_thread_info.recv_tid, NULL);
-	pthread_join(g_thread_info.parse_tid, NULL);
-	pthread_join(g_thread_info.merge_tid, NULL);
+	pthread_join(g_thread_info.exec_tid, NULL);
 
-	for (auto t : g_thread_info.worker) {
-		pthread_join(t, NULL);
+	for (int i = g_thread_info.num-1; i >= 0; --i) {
+		pthread_join(g_thread_info.worker[i], NULL);
 	}
 
 	for (auto k : g_thread_info.writer) {

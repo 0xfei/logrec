@@ -80,7 +80,7 @@ private:
 			off_t len = k.nsize;
 			sendfile(k.fd, client_fd, 0, &len, NULL, 0);
 #else
-			sendfile(k.fd, client_fd, NULL, k.nsize);
+			sendfile(client_fd, k.fd, NULL, k.nsize);
 #endif
 		}
 		close(client_fd);

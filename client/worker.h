@@ -23,8 +23,7 @@ namespace LogRec
 
 void *Worker(void *param);
 void *Reciver(void *param);
-void *Modifier(void *param);
-void *Merger(void *param);
+void* Executer(void* param);
 
 }
 
