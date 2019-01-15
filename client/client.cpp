@@ -29,14 +29,16 @@ int Client::StartWorker()
 	for (auto i = 0; i < g_thread_info.num; ++i) {
 		g_thread_info.state.push_back(PARSE_DATA);
 		g_thread_info.data_vec.push_back((char*)malloc(DATA_BLOCK_SIZE));
+		g_thread_info.moved_data_vec.push_back(g_thread_info.data_vec[i]);
 		g_thread_info.data_size.push_back(0);
-		g_thread_info.writer.push_back(FileWriter());
-		g_thread_info.tids.push_back(i);
 	}
 
 	pthread_create(&g_thread_info.recv_tid, NULL, Reciver, NULL);
 
 	for (auto i = 0; i < g_thread_info.num; ++i) {
+		g_thread_info.writer.push_back(FileWriter());
+		g_thread_info.tids.push_back(i);
+
 		pthread_t thread;
 		pthread_create(&thread, NULL, Worker, (void *)&g_thread_info.tids[i]);
 		g_thread_info.worker.push_back(thread);

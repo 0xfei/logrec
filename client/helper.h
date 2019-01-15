@@ -27,32 +27,50 @@ namespace LogRec
 struct TimeUsage {
 	TimeUsage(std::string hd): header(hd) { }
 
-	void Start() {
-		beg = GetTime();
-	}
+	void Start() { beg = GetTime(); }
 	void Output() {
 		dst = GetTime();
 		sprintf(s, "%s: %lldms\n", header.c_str(), dst-beg);
 		write(2, s, strlen(s));
 	}
-
 	int64_t GetTime() {
 		struct timeval tv;
 		gettimeofday(&tv,NULL);
 		return tv.tv_sec*1000 + tv.tv_usec/1000;
 	}
-
 	std::string header;
 	char s[100];
 	int64_t beg;
 	int64_t dst;
 };
 
+struct WField {
+	int weight;
+	int field;
+	int64_t value;
+};
+
 struct KeyValue {
 	KeyValue(): field_num(0) {}
-    int32_t key;
-    int32_t field_num;
-    int64_t fields[101];
+    int key;
+    int field_num;
+	int index_num;
+	int field_index[101];
+	WField  field_info[101];
+	int64_t field_value[101];
+
+	void Sort() {
+		for (int i = 0; i < index_num - 1; ++i) {
+			for (int j = i+1; j < index_num; ++j) {
+				auto a = field_info[i];
+				auto b = field_info[j];
+				if (a.weight > b.weight) {
+					field_info[j] = a;
+					field_info[i] = b;
+				}
+			}
+		}
+	}
 };
 
 enum OPTCODE {
@@ -82,47 +100,29 @@ struct LogRecord {
 
 #define FW_SIZE (512*1024*1024)
 struct FileWriter {
-	FileWriter() { size = 0; addr = malloc(FW_SIZE); }
+	FileWriter() { size = 0; addr = (char*)malloc(FW_SIZE); }
 
     void AddRecord(KeyValue *kv) {
-    	std::string key(KEY_PREFIX);
-    	key = key + std::to_string(kv->key);
-    	MemCpy(key.c_str(), key.size());
-    	AddField(kv, 1);
-    	AddField(kv, 10);
-	    AddField(kv, 100);
-    	for (int i = 1; i < 10; ++i) {
-    		AddField(kv, 10 + i);
-    	}
-    	for (int i = 2; i < 10; ++i) {
-    		AddField(kv, i);
-    		for (int j = 0; j < 10; ++j) {
-    			AddField(kv, i*10 + j);
+		char buffer[4096] = {0};
+		sprintf(buffer, "OD_%d", kv->key);
+    	kv->Sort();
+    	for (int i = 0; i < kv->index_num; ++i) {
+    		if (kv->field_info[i].value > 0) {
+    			auto& fd = kv->field_info[i];
+    			// TODO: call md5 consume
+    			char field[128] = {0};
+    			sprintf(field, " field_%d %s", fd.field, std::to_string(fd.value).c_str());
+    			strcat(buffer, field);
     		}
     	}
-	    ((char*)addr)[size++] = '\n';
+    	strcat(buffer, "\n");
+    	int len = strlen(buffer);
+    	memcpy(addr+size, buffer, len);
+    	size += len;
     }
 
-    void AddField(KeyValue *kv, int fd) {
-	    if (kv->fields[fd] <= 0) return;
-	    ((char*)addr)[size++] = ' ';
-	    std::string field(FIELD_PREFIX);
-	    field = field + std::to_string(fd);
-	    MemCpy(field.c_str(), field.size());
-	    ((char*)addr)[size++] = ' ';
-	    std::string value = std::to_string(kv->fields[fd]);
-	    // TODO: call md5_consumer
-	    MemCpy(value.c_str(), value.size());
-	}
-
-    void MemCpy(const char* str, int length) {
-		for (auto i = 0; i < length; ++i) {
-			((char*)addr)[size++] = str[i];
-		}
-	}
-
     int32_t size;
-    void *addr;
+    char *addr;
 };
 
 
@@ -140,6 +140,7 @@ struct ThreadInfo {
     pthread_t exec_tid;
 	std::vector<THREAD_STATE> state;
 	std::vector<char*> data_vec;
+	std::vector<char*> moved_data_vec;
 	std::vector<int> data_size;
     std::vector<pthread_t> worker;
     std::vector<FileWriter> writer;

@@ -79,9 +79,9 @@ void* Reciver(void* param)
 		}
 
 		int tid = count % g_thread_info.num;
-		int old_size = g_thread_info.data_size[tid];
-		memcpy(g_thread_info.data_vec[tid] + old_size, g_curr_buffer, nsize);
-		g_thread_info.data_size[tid] = old_size + nsize;
+		memcpy(g_thread_info.moved_data_vec[tid], g_curr_buffer, nsize);
+		g_thread_info.data_size[tid] += nsize;
+		g_thread_info.moved_data_vec[tid] += nsize;
 		count++;
 	}
 	close(g_client_fd);
