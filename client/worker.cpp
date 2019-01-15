@@ -110,21 +110,17 @@ void* Worker(void* param)
 
 	ParseCommand(tid);
 
+	TimeUsage hot(std::to_string(tid)+"#HashOperator");
+	hot.Start();
 	for (int i = 10; i < TOTAL_RECORD_SIZE-100; ++i) {
 		auto record = g_total_record[i];
 		if (record != NULL && g_key_threadid[record->curkey] == tid) {
 			if (record->code == RENAME) g_key_threadid[record->newkey] = tid;
 			ModifyHash(record);
-			if (g_key_latest[record->curkey] == record->timestamp) {
-				if (record->code == RENAME) {
-					FinishKey(record->newkey);
-				} else {
-					FinishKey(record->curkey);
-				}
-			}
 		}
 	}
 	g_thread_info.state[tid] = WRITE_DATA;
+	hot.Output();
 
 	bool write_data = true;
 	while (true) {
@@ -156,9 +152,8 @@ void AllocHashMap()
 	g_key_threadid = (int*)malloc(MAX_HASH*sizeof(int));
 	g_key_latest = (int64_t*)malloc(MAX_HASH*sizeof(int64_t));
 	KeyValue* kvarray = (KeyValue*)malloc(sizeof(KeyValue)*MAX_HASH);
-	for (int i = 1; i < MAX_HASH; ++i) {
+	for (int i = 0; i < MAX_HASH; ++i) {
 		g_hash_map[i] = &kvarray[i];
-		g_hash_map[i]->key = i;
 	}
 	allocer.Output();
 }
