@@ -350,22 +350,15 @@ void ParseCommand(int tid)
 /*
  * connect helper
  */
-inline void LoadIpPort(std::string& ip, int& port)
-{
-	std::ifstream conf("client.conf");
-	conf >> ip >> port;
-	conf.close();
-}
+#define SERVER_IP   "10.90.51.49"
+#define SERVER_PORT 8083
 
 void Connect()
 {
-	std::string ip; int port;
-	LoadIpPort(ip, port);
-
 	struct sockaddr_in addr = {0};
 	addr.sin_family = AF_INET;
-	addr.sin_port = htons(port);
-	addr.sin_addr.s_addr=inet_addr(ip.c_str());
+	addr.sin_port = htons(SERVER_PORT);
+	addr.sin_addr.s_addr=inet_addr(SERVER_IP);
 	g_client_fd = socket(PF_INET, SOCK_STREAM, 0);
 
 	int ret = connect(g_client_fd, (struct sockaddr*)&addr, sizeof(addr));

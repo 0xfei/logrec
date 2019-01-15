@@ -6,14 +6,13 @@
 #include "hashmap.h"
 #include "worker.h"
 
-LogRec::Client g_client;
 
 int main()
 {
 	LogRec::TimeUsage tm("TotalUsage:");
 	tm.Start();
-	g_client.StartWorker();
-	g_client.SaveData();
+	LogRec::StartWorker();
+	LogRec::SaveData();
 	tm.Output();
 	return 0;
 }
@@ -23,7 +22,7 @@ namespace LogRec
 
 ThreadInfo g_thread_info;
 
-int Client::StartWorker()
+int StartWorker()
 {
 	g_thread_info.num = sysconf(_SC_NPROCESSORS_ONLN) - 1;
 	for (auto i = 0; i < g_thread_info.num; ++i) {
@@ -46,8 +45,12 @@ int Client::StartWorker()
 	return 0;
 }
 
-int Client::SaveData()
+int SaveData()
 {
+	int output_fd = open("output.data", O_WRONLY|O_CREAT|O_TRUNC, 0644);
+	if (output_fd == -1) {
+		exit(-1);
+	}
 	pthread_join(g_thread_info.recv_tid, NULL);
 	pthread_join(g_thread_info.exec_tid, NULL);
 
