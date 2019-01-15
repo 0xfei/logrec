@@ -20,19 +20,14 @@
 namespace LogRec
 {
 
-#define USECONDS    10000
+#define USECONDS    20000
 #define BLOCK_SIZE  (1024*1024)
 
 bool g_recivered = false;
-bool g_parsedeng = false;
-
-char g_buffer[BLOCK_SIZE] = {0};
-char g_prev_buffer[BLOCK_SIZE] = {0};
-char g_curr_buffer[BLOCK_SIZE*2] = {0};
 
 HashMap g_hashmap;
-int g_key_threadid[MAX_HASH];
-int64_t g_key_latest[MAX_HASH];
+int* g_key_threadid;
+int64_t* g_key_latest;
 
 #define TOTAL_RECORD_SIZE   210000000
 LogRecord* g_total_record[TOTAL_RECORD_SIZE];
@@ -44,7 +39,7 @@ struct ThreadRecord {
 };
 
 #define MAX_THREAD_NUM  40
-ThreadRecord g_thread_record[MAX_THREAD_NUM];
+ThreadRecord* g_thread_record;
 
 /*
 struct RenameOpt {
@@ -67,6 +62,10 @@ void* Reciver(void* param)
 	CORE_BIND(1);
 	TimeUsage tm("ReciverUsage"); tm.Start();
 	Connect();
+
+	char g_buffer[BLOCK_SIZE] = {0};
+	char g_prev_buffer[BLOCK_SIZE] = {0};
+	char g_curr_buffer[BLOCK_SIZE*2] = {0};
 
 	int count = 0;
 	ssize_t nsize, prev_size = 0, point = 0;
@@ -128,6 +127,7 @@ void* Worker(void* param)
 	CORE_BIND(tid+1);
 
 	ParseCommand(tid);
+	int start = TOTAL_RECORD_SIZE/g_thread_info.num;
 
 	while (g_thread_info.state[tid] != OPERATE_HASH) {
 		usleep(USECONDS);
@@ -176,6 +176,9 @@ void AllocHashMap()
 	for (int i = 1; i < MAX_HASH; ++i) {
 		g_hashmap.hash_map[i] = &kvarray[i];
 	}
+	g_key_threadid = (int*)malloc(MAX_HASH*sizeof(int));
+	g_key_latest = (int64_t*)malloc(MAX_HASH*sizeof(int));
+	g_thread_record = (ThreadRecord*)malloc(MAX_THREAD_NUM*sizeof(ThreadRecord));
 	allocer.Output();
 }
 
@@ -184,16 +187,11 @@ void* Executer(void* param)
 	CORE_BIND(0);
 	AllocHashMap();
 
-	while (!g_parsedeng) { usleep(USECONDS); }
-
 	TimeUsage tm("Executer"); tm.Start();
 
 	auto total_num = g_thread_info.num;
 
 	for (int i = 0; i < TOTAL_RECORD_SIZE; ++i) {
-
-		//auto cur_key = g_rename_operation[i].cur_key;
-		//auto new_key = g_rename_operation[i].new_key;
 		auto record = g_total_record[i];
 		if (record != NULL && record->code == RENAME) {
 			auto cur_key = record->curkey;
@@ -418,7 +416,6 @@ void ParseCommand(int tid)
 					break;
 			}
 			g_total_record[time_index] = record;
-			if (time_index > 60*1000*1000) g_parsedeng = true;
 		}
 	}
 	tm.Output();
