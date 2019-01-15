@@ -97,7 +97,6 @@ struct FileWriter {
 
 enum THREAD_STATE {
 	PARSE_DATA = 1,
-	OPERATE_HASH = 2,
 	WRITE_DATA = 3,
 };
 
@@ -105,7 +104,6 @@ enum THREAD_STATE {
 struct ThreadInfo {
     int32_t num;
     pthread_t recv_tid;
-    pthread_t exec_tid;
 	std::vector<THREAD_STATE> state;
 	std::vector<char*> data_vec;
 	std::vector<int> data_size;

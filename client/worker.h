@@ -23,7 +23,7 @@ namespace LogRec
 
 void *Worker(void *param);
 void *Reciver(void *param);
-void* Executer(void* param);
+void AllocHashMap();
 
 }
 

@@ -32,23 +32,6 @@ int64_t* g_key_latest;
 #define TOTAL_RECORD_SIZE   210000000
 LogRecord* g_total_record[TOTAL_RECORD_SIZE];
 
-#define THREAD_RECNUM   2000000
-struct ThreadRecord {
-	int num;
-	LogRecord* records[THREAD_RECNUM];
-};
-
-#define MAX_THREAD_NUM  40
-ThreadRecord* g_thread_record;
-
-/*
-struct RenameOpt {
-	int cur_key;
-	int new_key;
-};
-RenameOpt g_rename_operation[TOTAL_RECORD_SIZE];
-*/
-
 int g_client_fd;
 int64_t g_basic_stamp;
 
@@ -127,19 +110,18 @@ void* Worker(void* param)
 	CORE_BIND(tid+1);
 
 	ParseCommand(tid);
-	int start = TOTAL_RECORD_SIZE/g_thread_info.num;
 
-	while (g_thread_info.state[tid] != OPERATE_HASH) {
-		usleep(USECONDS);
-	}
-	for (int i = 0; i < g_thread_record[tid].num; ++i) {
-		auto & record = g_thread_record[tid].records[i];
-		g_hashmap.ModifyHash(record);
-		if (g_key_latest[record->curkey] == record->timestamp) {
-			if (record->code == RENAME) {
-				g_hashmap.FinishKey(record->newkey);
-			} else {
-				g_hashmap.FinishKey(record->curkey);
+	for (int i = 1; i < TOTAL_RECORD_SIZE; ++i) {
+		auto record = g_total_record[i];
+		if (record != NULL && g_key_threadid[record->curkey] == tid) {
+			if (record->code == RENAME) g_key_threadid[record->newkey] = tid;
+			g_hashmap.ModifyHash(record);
+			if (g_key_latest[record->curkey] == record->timestamp) {
+				if (record->code == RENAME) {
+					g_hashmap.FinishKey(record->newkey);
+				} else {
+					g_hashmap.FinishKey(record->curkey);
+				}
 			}
 		}
 	}
@@ -172,60 +154,13 @@ void AllocHashMap()
 {
 	TimeUsage allocer("Allocer");
 	allocer.Start();
+	g_key_threadid = (int*)malloc(MAX_HASH*sizeof(int));
+	g_key_latest = (int64_t*)malloc(MAX_HASH*sizeof(int64_t));
 	KeyValue* kvarray = (KeyValue*)malloc(sizeof(KeyValue)*MAX_HASH);
 	for (int i = 1; i < MAX_HASH; ++i) {
 		g_hashmap.hash_map[i] = &kvarray[i];
 	}
-	g_key_threadid = (int*)malloc(MAX_HASH*sizeof(int));
-	g_key_latest = (int64_t*)malloc(MAX_HASH*sizeof(int));
-	g_thread_record = (ThreadRecord*)malloc(MAX_THREAD_NUM*sizeof(ThreadRecord));
 	allocer.Output();
-}
-
-void* Executer(void* param)
-{
-	CORE_BIND(0);
-	AllocHashMap();
-
-	TimeUsage tm("Executer"); tm.Start();
-
-	auto total_num = g_thread_info.num;
-
-	for (int i = 0; i < TOTAL_RECORD_SIZE; ++i) {
-		auto record = g_total_record[i];
-		if (record != NULL && record->code == RENAME) {
-			auto cur_key = record->curkey;
-			auto new_key = record->newkey;
-			if (g_key_threadid[cur_key] == 0) {
-				g_key_threadid[cur_key] = cur_key%total_num;
-				g_key_threadid[new_key] = cur_key%total_num;
-			} else {
-				g_key_threadid[new_key] = g_key_threadid[cur_key];
-			}
-			g_key_latest[record->newkey] = record->timestamp;
-		}
-	}
-
-	for (int i = 0; i < TOTAL_RECORD_SIZE; ++i) {
-		auto record = g_total_record[i];
-		if (record != NULL) {
-			auto cur_key = record->curkey;
-			auto timestamp = record->timestamp;
-			auto tid = cur_key % total_num;
-			g_key_latest[cur_key] = timestamp;
-			if (g_key_threadid[cur_key] == 0) {
-				g_key_threadid[cur_key] = tid;
-			} else {
-				tid = g_key_threadid[cur_key];
-			}
-			g_thread_record[tid].records[g_thread_record[tid].num++] = record;
-		}
-	}
-	for (int tid = 0; tid < g_thread_info.num; ++tid) {
-		g_thread_info.state[tid] = OPERATE_HASH;
-	}
-	tm.Output();
-	return NULL;
 }
 
 
@@ -237,6 +172,7 @@ inline void AddToHashmap(int key, int tid)
 	auto & k = g_hashmap.hash_map[key];
 	if (k != NULL && k->field_num > 0) {
 		k->key = key;
+		if (k->buffer.empty()) g_hashmap.FinishKey(key);
 		g_thread_info.writer[tid].AddRecord(k);
 	}
 }
@@ -396,7 +332,14 @@ void ParseCommand(int tid)
 			record->timestamp = timestamp;
 			record->code = optcode;
 			auto time_index = timestamp-g_basic_stamp;
-			record->curkey = ParseCurKey(j, addr);
+			auto cur_key = ParseCurKey(j, addr);
+			record->curkey = cur_key;
+			auto tid = cur_key%g_thread_info.num;
+			if (g_key_threadid[cur_key] == 0) {
+				g_key_threadid[cur_key] = tid;
+			} else {
+				tid = g_key_threadid[cur_key];
+			}
 			switch (record->code) {
 				case HDEL:
 					ParseHDEL(record, j, addr);
@@ -406,8 +349,7 @@ void ParseCommand(int tid)
 					break;
 				case RENAME:
 					record->newkey = ParseRENAME(j, addr);
-					//g_rename_operation[time_index].cur_key = record->curkey;
-					//g_rename_operation[time_index].new_key = record->newkey;
+					g_key_threadid[record->newkey] = tid;
 					break;
 				case HINCRBY:
 					ParseHINCRBY(record, j, addr);
@@ -416,6 +358,9 @@ void ParseCommand(int tid)
 					break;
 			}
 			g_total_record[time_index] = record;
+			if (g_key_latest[record->curkey] < timestamp) {
+				g_key_latest[record->curkey] = timestamp;
+			}
 		}
 	}
 	tm.Output();
