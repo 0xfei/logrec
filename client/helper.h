@@ -57,7 +57,6 @@ struct KeyValue {
 	int index_num;
 	int field_index[101];
 	WField  field_info[101];
-	int64_t field_value[101];
 
 	void Sort() {
 		for (int i = 0; i < index_num - 1; ++i) {

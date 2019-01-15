@@ -34,6 +34,7 @@ char g_curr_buffer[BLOCK_SIZE*2] = {0};
 HashMap g_hashmap;
 
 int64_t g_basic_stamp;
+int g_basic_mins;
 LogRecord* g_total_record[TOTAL_RECORD_SIZE];
 
 int g_client_fd;
@@ -59,6 +60,7 @@ void* Reciver(void* param)
 				g_basic_stamp = g_basic_stamp*10 + (g_buffer[i] - '0');
 			}
 			g_basic_stamp = g_basic_stamp - 100;
+			g_basic_mins = g_basic_stamp/(1000*1000*60);
 		}
 		if (nsize == 0) break;
 		int temp_size = nsize;
@@ -178,9 +180,9 @@ void DFSAddHash(int slut, int tid)
 	int s = 0, t = 10;
 	if (slut < 20) {
 		if (tid % 2 == 1) {
-			s = 5, t = 10;
+			s = 4, t = 10;
 		} else {
-			s = 0, t = 5;
+			s = 0, t = 4;
 		}
 	}
 
@@ -307,16 +309,21 @@ void ParseCommand(int tid)
 {
 	TimeUsage tm(std::to_string(tid)+"#ParseCommand");
 	tm.Start();
-	int j = 0;
+	int j = 0, parsed_num = 0;
 	char* addr = g_thread_info.data_vec[tid];
 	int addr_size = g_thread_info.data_size[tid];
 	while (true) {
-		while (addr_size - j <= 100 && !g_recivered) {
+		while (addr_size - j - parsed_num <= 100 && !g_recivered) {
 			usleep(USECONDS);
 			addr_size = g_thread_info.data_size[tid];
 		}
 		if (g_recivered && j == addr_size) break;
 		while (j < addr_size) {
+            while (addr_size - j - parsed_num <= 100 && !g_recivered) {
+                usleep(USECONDS);
+                addr_size = g_thread_info.data_size[tid];
+            }
+            if (j > BLOCK_SIZE) { addr += j; j = 0; parsed_num += j; }
 			auto timestamp = ParseTimestmp(j, addr);
 			auto optcode = ParseOptcode(j, addr);
 			if (NotODStart(j, addr)) continue;
@@ -350,22 +357,14 @@ void ParseCommand(int tid)
 /*
  * connect helper
  */
-inline void LoadIpPort(std::string& ip, int& port)
+#define SERVER_IP   "10.90.51.49"
+#define SERVER_PORT 8083
+inline void Connect()
 {
-	std::ifstream conf("client.conf");
-	conf >> ip >> port;
-	conf.close();
-}
-
-void Connect()
-{
-	std::string ip; int port;
-	LoadIpPort(ip, port);
-
 	struct sockaddr_in addr = {0};
 	addr.sin_family = AF_INET;
-	addr.sin_port = htons(port);
-	addr.sin_addr.s_addr=inet_addr(ip.c_str());
+	addr.sin_port = htons(SERVER_PORT);
+	addr.sin_addr.s_addr=inet_addr(SERVER_IP);
 	g_client_fd = socket(PF_INET, SOCK_STREAM, 0);
 
 	int ret = connect(g_client_fd, (struct sockaddr*)&addr, sizeof(addr));

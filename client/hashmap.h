@@ -20,10 +20,7 @@ public:
 	    KeyValue* key_data = hash_map[record->curkey];
     	switch (record->code) {
 		    case DEL:
-		    	for (int i = 0; i < key_data->field_num; ++i) {
-		    		key_data->field_info[i].value = 0;
-		    	}
-		    	key_data->field_num = 0;
+                RemoveHash(key_data);
 			    break;
 		    case RENAME:
 		    	RenameHash(record->curkey, record->newkey);
@@ -47,10 +44,15 @@ private:
     	hash_map[cur_hash] = hash_map[new_hash];
     	hash_map[new_hash] = cur_data;
 
-	    for (int i = 0; i < hash_map[cur_hash]->field_num; ++i) {
-		    hash_map[cur_hash]->field_info[i].value = 0;
-	    }
-	    hash_map[cur_hash]->field_num = 0;
+    	RemoveHash(hash_map[cur_hash]);
+    }
+
+    void RemoveHash(KeyValue* key_data) {
+        if (key_data->field_num == 0) return;
+        for (int i = 0; i < key_data->index_num; ++i) {
+            key_data->field_info[i].value = 0;
+        }
+        key_data->field_num = 0;
     }
 
 	void OptField(LogRecord* record, KeyValue* key_data,
@@ -63,42 +65,31 @@ private:
 
 			switch (code) {
 				case HDEL:
-					if (key_data->field_value[opt_field] != 0) {
-						key_data->field_num = key_data->field_num - 1;
-					}
-					key_data->field_value[opt_field] = 0;
 					if (index < index_num && key_data->field_info[index].field == opt_field) {
-						key_data->field_info[index].value = 0;
+						if (key_data->field_info[index].value != 0) {
+                            key_data->field_info[index].value = 0;
+                            key_data->field_num = key_data->field_num - 1;
+						}
 					}
 					break;
 				case HINCRBY:
-					if (key_data->field_value[opt_field] == 0) {
-						key_data->field_num = key_data->field_num + 1;
-					}
-					key_data->field_value[opt_field] += opt_value;
 					if (index < index_num && key_data->field_info[index].field == opt_field) {
+					    if (key_data->field_info[index].value == 0) {
+                            key_data->field_num = key_data->field_num + 1;
+					    }
 						key_data->field_info[index].value += opt_value;
 					} else {
-						key_data->field_index[opt_field] = index_num;
-						key_data->field_info[index_num].value = key_data->field_value[opt_field];
-						key_data->field_info[index_num].field = opt_field;
-						key_data->field_info[index_num].weight = X2Weight(opt_field);
-						key_data->index_num += 1;
+                        NewFieldInfo(key_data, index_num, opt_field, opt_value);
 					}
 					break;
 				case HMSET:
-					if (key_data->field_value[opt_field] == 0) {
-						key_data->field_num = key_data->field_num + 1;
-					}
-					key_data->field_value[opt_field] = opt_value;
 					if (index < index_num && key_data->field_info[index].field == opt_field) {
-						key_data->field_info[index].value += opt_value;
+                        if (key_data->field_info[index].value == 0) {
+                            key_data->field_num = key_data->field_num + 1;
+                        }
+						key_data->field_info[index].value = opt_value;
 					} else {
-						key_data->field_index[opt_field] = index_num;
-						key_data->field_info[index_num].value = key_data->field_value[opt_field];
-						key_data->field_info[index_num].field = opt_field;
-						key_data->field_info[index_num].weight = X2Weight(opt_field);
-						key_data->index_num += 1;
+					    NewFieldInfo(key_data, index_num, opt_field, opt_value);
 					}
 					break;
 				default:
@@ -106,6 +97,15 @@ private:
 			}
 		}
 	}
+
+	void NewFieldInfo(KeyValue* key_data, int index_num, int opt_field, int64_t opt_value) {
+        key_data->field_index[opt_field] = index_num;
+        key_data->field_info[index_num].value = opt_value;
+        key_data->field_info[index_num].field = opt_field;
+        key_data->field_info[index_num].weight = X2Weight(opt_field);
+        key_data->index_num += 1;
+        key_data->field_num += 1;
+    }
 
 	int X2Weight(int x) {
 		return (x/100+1)*100 + ((x%100)/10+1)*10 + (x%10+1);
