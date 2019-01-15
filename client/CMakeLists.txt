@@ -13,7 +13,7 @@ SET(client_src
         md5/time_consuming_md5.cpp
         md5/time_consuming_md5.h
         worker.cpp
-        worker.h)
+        worker.h hashmap.cpp)
 ADD_EXECUTABLE(client ${client_src})
 
 set(CMAKE_BUILD_TYPE "Release")

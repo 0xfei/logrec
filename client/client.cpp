@@ -25,6 +25,8 @@ ThreadInfo g_thread_info;
 
 int StartWorker()
 {
+	AllocHashMap();
+
 	g_thread_info.num = sysconf(_SC_NPROCESSORS_ONLN) - 1;
 	for (auto i = 0; i < g_thread_info.num; ++i) {
 		g_thread_info.state.push_back(PARSE_DATA);
@@ -41,8 +43,6 @@ int StartWorker()
 		pthread_create(&thread, NULL, Worker, (void *)&g_thread_info.tids[i]);
 		g_thread_info.worker.push_back(thread);
 	}
-
-	AllocHashMap();
 
 	return 0;
 }

@@ -25,7 +25,6 @@ namespace LogRec
 
 bool g_recivered = false;
 
-HashMap g_hashmap;
 int* g_key_threadid;
 int64_t* g_key_latest;
 
@@ -111,16 +110,16 @@ void* Worker(void* param)
 
 	ParseCommand(tid);
 
-	for (int i = 1; i < TOTAL_RECORD_SIZE; ++i) {
+	for (int i = 10; i < TOTAL_RECORD_SIZE-100; ++i) {
 		auto record = g_total_record[i];
 		if (record != NULL && g_key_threadid[record->curkey] == tid) {
 			if (record->code == RENAME) g_key_threadid[record->newkey] = tid;
-			g_hashmap.ModifyHash(record);
+			ModifyHash(record);
 			if (g_key_latest[record->curkey] == record->timestamp) {
 				if (record->code == RENAME) {
-					g_hashmap.FinishKey(record->newkey);
+					FinishKey(record->newkey);
 				} else {
-					g_hashmap.FinishKey(record->curkey);
+					FinishKey(record->curkey);
 				}
 			}
 		}
@@ -158,7 +157,8 @@ void AllocHashMap()
 	g_key_latest = (int64_t*)malloc(MAX_HASH*sizeof(int64_t));
 	KeyValue* kvarray = (KeyValue*)malloc(sizeof(KeyValue)*MAX_HASH);
 	for (int i = 1; i < MAX_HASH; ++i) {
-		g_hashmap.hash_map[i] = &kvarray[i];
+		g_hash_map[i] = &kvarray[i];
+		g_hash_map[i]->key = i;
 	}
 	allocer.Output();
 }
@@ -169,10 +169,9 @@ void AllocHashMap()
  */
 inline void AddToHashmap(int key, int tid)
 {
-	auto & k = g_hashmap.hash_map[key];
-	if (k != NULL && k->field_num > 0) {
+	auto & k = g_hash_map[key];
+	if (k->field_num > 0) {
 		k->key = key;
-		if (k->buffer.empty()) g_hashmap.FinishKey(key);
 		g_thread_info.writer[tid].AddRecord(k);
 	}
 }
@@ -334,11 +333,11 @@ void ParseCommand(int tid)
 			auto time_index = timestamp-g_basic_stamp;
 			auto cur_key = ParseCurKey(j, addr);
 			record->curkey = cur_key;
-			auto tid = cur_key%g_thread_info.num;
+			auto key_tid = cur_key%g_thread_info.num;
 			if (g_key_threadid[cur_key] == 0) {
-				g_key_threadid[cur_key] = tid;
+				g_key_threadid[cur_key] = key_tid;
 			} else {
-				tid = g_key_threadid[cur_key];
+				key_tid = g_key_threadid[cur_key];
 			}
 			switch (record->code) {
 				case HDEL:
@@ -349,7 +348,7 @@ void ParseCommand(int tid)
 					break;
 				case RENAME:
 					record->newkey = ParseRENAME(j, addr);
-					g_key_threadid[record->newkey] = tid;
+					g_key_threadid[record->newkey] = key_tid;
 					break;
 				case HINCRBY:
 					ParseHINCRBY(record, j, addr);

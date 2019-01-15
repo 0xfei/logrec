@@ -53,7 +53,8 @@ struct KeyValue {
     int32_t key;
     int32_t field_num;
     int64_t fields[101];
-    std::string buffer;
+    bool finished;
+    char buffer[4096];
 };
 
 enum OPTCODE {
@@ -86,8 +87,9 @@ struct FileWriter {
 	FileWriter() { size = 0; addr = (char*)malloc(FW_SIZE); }
 
     void AddRecord(KeyValue *kv) {
-		memcpy(addr, kv->buffer.c_str(), kv->buffer.size());
-		size += kv->buffer.size();
+		int len = strlen(kv->buffer);
+		memcpy(addr+size, kv->buffer, len);
+		size += len;
     }
 
     int32_t size;
