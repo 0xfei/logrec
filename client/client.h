@@ -15,24 +15,8 @@
 namespace LogRec
 {
 
-class Client {
-public:
-    Client() { LoadConfig(); }
-    virtual ~Client() { }
-
-    int StartWorker();
-    int SaveData();
-
-private:
-    void LoadConfig() {
-    	output_fd = open("output.data", O_WRONLY|O_CREAT|O_TRUNC, 0644);
-    	if (output_fd == -1) {
-    		exit(-1);
-    	}
-    }
-
-    int output_fd;
-};
+int StartWorker();
+int SaveData();
 
 }
 

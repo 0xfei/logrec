@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <sys/time.h>
+#include "md5/time_consuming_md5.h"
 
 namespace LogRec
 {
@@ -110,7 +111,7 @@ struct FileWriter {
 	    field = field + std::to_string(fd);
 	    MemCpy(field.c_str(), field.size());
 	    ((char*)addr)[size++] = ' ';
-	    std::string value = std::to_string(kv->fields[fd]);
+	    std::string value = time_consuming_md5(std::to_string(kv->fields[fd]));
 	    // TODO: call md5_consumer
 	    MemCpy(value.c_str(), value.size());
 	}
