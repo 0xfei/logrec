@@ -13,7 +13,6 @@
 #include <unistd.h>
 #include <string.h>
 #include <sys/time.h>
-#include "md5/time_consuming_md5.h"
 
 namespace LogRec
 {
@@ -54,6 +53,7 @@ struct KeyValue {
     int32_t key;
     int32_t field_num;
     int64_t fields[101];
+    std::string buffer;
 };
 
 enum OPTCODE {
@@ -83,57 +83,24 @@ struct LogRecord {
 
 #define FW_SIZE (512*1024*1024)
 struct FileWriter {
-	FileWriter() { size = 0; addr = malloc(FW_SIZE); }
+	FileWriter() { size = 0; addr = (char*)malloc(FW_SIZE); }
 
     void AddRecord(KeyValue *kv) {
-    	std::string key(KEY_PREFIX);
-    	key = key + std::to_string(kv->key);
-    	MemCpy(key.c_str(), key.size());
-    	AddField(kv, 1);
-    	AddField(kv, 10);
-	    AddField(kv, 100);
-    	for (int i = 1; i < 10; ++i) {
-    		AddField(kv, 10 + i);
-    	}
-    	for (int i = 2; i < 10; ++i) {
-    		AddField(kv, i);
-    		for (int j = 0; j < 10; ++j) {
-    			AddField(kv, i*10 + j);
-    		}
-    	}
-	    ((char*)addr)[size++] = '\n';
+		memcpy(addr, kv->buffer.c_str(), kv->buffer.size());
+		size += kv->buffer.size();
     }
 
-    void AddField(KeyValue *kv, int fd) {
-	    if (kv->fields[fd] <= 0) return;
-	    ((char*)addr)[size++] = ' ';
-	    std::string field(FIELD_PREFIX);
-	    field = field + std::to_string(fd);
-	    MemCpy(field.c_str(), field.size());
-	    ((char*)addr)[size++] = ' ';
-	    std::string value = time_consuming_md5(std::to_string(kv->fields[fd]));
-	    // TODO: call md5_consumer
-	    MemCpy(value.c_str(), value.size());
-	}
-
-    void MemCpy(const char* str, int length) {
-		for (auto i = 0; i < length; ++i) {
-			((char*)addr)[size++] = str[i];
-		}
-	}
-
     int32_t size;
-    void *addr;
+    char *addr;
 };
-
 
 
 enum THREAD_STATE {
 	PARSE_DATA = 1,
-	FINIS_PARS = 2,
+	OPERATE_HASH = 2,
+	WRITE_DATA = 3,
 };
 
-#define DATA_BLOCK_SIZE (1024*1024*1024)
 
 struct ThreadInfo {
     int32_t num;
@@ -146,8 +113,6 @@ struct ThreadInfo {
     std::vector<FileWriter> writer;
 	std::vector<int> tids;
 };
-
-#define TOTAL_RECORD_SIZE   210000000
 
 extern ThreadInfo g_thread_info;
 

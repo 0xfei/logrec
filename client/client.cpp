@@ -6,6 +6,7 @@
 #include "hashmap.h"
 #include "worker.h"
 
+#define DATA_BLOCK_SIZE (1024*1024*1024)
 
 int main()
 {
@@ -40,6 +41,8 @@ int StartWorker()
 		pthread_create(&thread, NULL, Worker, (void *)&g_thread_info.tids[i]);
 		g_thread_info.worker.push_back(thread);
 	}
+	pthread_join(g_thread_info.recv_tid, NULL);
+
 	pthread_create(&g_thread_info.exec_tid, NULL, Executer, NULL);
 
 	return 0;
@@ -51,7 +54,7 @@ int SaveData()
 	if (output_fd == -1) {
 		exit(-1);
 	}
-	pthread_join(g_thread_info.recv_tid, NULL);
+
 	pthread_join(g_thread_info.exec_tid, NULL);
 
 	for (int i = g_thread_info.num-1; i >= 0; --i) {

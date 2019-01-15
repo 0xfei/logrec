@@ -24,7 +24,6 @@ namespace LogRec
 #define BLOCK_SIZE  (1024*1024)
 
 bool g_recivered = false;
-bool g_execcuted = false;
 bool g_parsedeng = false;
 
 char g_buffer[BLOCK_SIZE] = {0};
@@ -32,12 +31,31 @@ char g_prev_buffer[BLOCK_SIZE] = {0};
 char g_curr_buffer[BLOCK_SIZE*2] = {0};
 
 HashMap g_hashmap;
+int g_key_threadid[MAX_HASH];
+int64_t g_key_latest[MAX_HASH];
 
-int64_t g_basic_stamp;
+#define TOTAL_RECORD_SIZE   210000000
 LogRecord* g_total_record[TOTAL_RECORD_SIZE];
 
-int g_client_fd;
+#define THREAD_RECNUM   2000000
+struct ThreadRecord {
+	int num;
+	LogRecord* records[THREAD_RECNUM];
+};
 
+#define MAX_THREAD_NUM  40
+ThreadRecord g_thread_record[MAX_THREAD_NUM];
+
+/*
+struct RenameOpt {
+	int cur_key;
+	int new_key;
+};
+RenameOpt g_rename_operation[TOTAL_RECORD_SIZE];
+*/
+
+int g_client_fd;
+int64_t g_basic_stamp;
 
 /*
  * recv data from server
@@ -110,17 +128,38 @@ void* Worker(void* param)
 	CORE_BIND(tid+1);
 
 	ParseCommand(tid);
-	g_thread_info.state[tid] = FINIS_PARS;
 
-	while (!g_execcuted) {
+	while (g_thread_info.state[tid] != OPERATE_HASH) {
+		usleep(USECONDS);
+	}
+	for (int i = 0; i < g_thread_record[tid].num; ++i) {
+		auto & record = g_thread_record[tid].records[i];
+		g_hashmap.ModifyHash(record);
+		if (g_key_latest[record->curkey] == record->timestamp) {
+			if (record->code == RENAME) {
+				g_hashmap.FinishKey(record->newkey);
+			} else {
+				g_hashmap.FinishKey(record->curkey);
+			}
+		}
+	}
+	g_thread_info.state[tid] = WRITE_DATA;
+
+	bool write_data = true;
+	while (true) {
+		for (int i = 0; i < g_thread_info.num; ++i) {
+			if (g_thread_info.state[i] != WRITE_DATA) {
+				write_data = false;
+				break;
+			}
+		}
+		if (write_data) break;
 		usleep(USECONDS);
 	}
 
 	TimeUsage tm(std::to_string(tid)+"#AddFileWriter");
 	tm.Start();
-
 	if (tid < g_worker_slut_size) AddFileWriter(tid);
-
 	tm.Output();
 	return NULL;
 }
@@ -129,33 +168,64 @@ void* Worker(void* param)
 /*
  * Executer thread
  */
+void AllocHashMap()
+{
+	TimeUsage allocer("Allocer");
+	allocer.Start();
+	KeyValue* kvarray = (KeyValue*)malloc(sizeof(KeyValue)*MAX_HASH);
+	for (int i = 1; i < MAX_HASH; ++i) {
+		g_hashmap.hash_map[i] = &kvarray[i];
+	}
+	allocer.Output();
+}
+
 void* Executer(void* param)
 {
 	CORE_BIND(0);
-	{
-		TimeUsage allocer("Allocer");
-		allocer.Start();
+	AllocHashMap();
 
-		KeyValue* kvarray = (KeyValue*)malloc(sizeof(KeyValue)*MAX_HASH);
-		for (int i = 1; i < MAX_HASH; ++i) {
-			g_hashmap.hash_map[i] = &kvarray[i];
-		}
-		allocer.Output();
-	}
+	while (!g_parsedeng) { usleep(USECONDS); }
 
-	while (!g_parsedeng) {
-		usleep(USECONDS);
-	}
+	TimeUsage tm("Executer"); tm.Start();
 
-	TimeUsage tm("Executer");
-	tm.Start();
+	auto total_num = g_thread_info.num;
 
 	for (int i = 0; i < TOTAL_RECORD_SIZE; ++i) {
-		if (g_total_record[i] != NULL) {
-			g_hashmap.ModifyHash(g_total_record[i]);
+
+		//auto cur_key = g_rename_operation[i].cur_key;
+		//auto new_key = g_rename_operation[i].new_key;
+		auto record = g_total_record[i];
+		if (record != NULL && record->code == RENAME) {
+			auto cur_key = record->curkey;
+			auto new_key = record->newkey;
+			if (g_key_threadid[cur_key] == 0) {
+				g_key_threadid[cur_key] = cur_key%total_num;
+				g_key_threadid[new_key] = cur_key%total_num;
+			} else {
+				g_key_threadid[new_key] = g_key_threadid[cur_key];
+			}
+			g_key_latest[record->newkey] = record->timestamp;
 		}
 	}
-	g_execcuted = true;
+
+	for (int i = 0; i < TOTAL_RECORD_SIZE; ++i) {
+		auto record = g_total_record[i];
+		if (record != NULL) {
+			auto cur_key = record->curkey;
+			auto timestamp = record->timestamp;
+			auto tid = cur_key % total_num;
+			g_key_latest[cur_key] = timestamp;
+			if (g_key_threadid[cur_key] == 0) {
+				g_key_threadid[cur_key] = tid;
+			} else {
+				tid = g_key_threadid[cur_key];
+			}
+			g_thread_record[tid].records[g_thread_record[tid].num++] = record;
+		}
+	}
+	for (int tid = 0; tid < g_thread_info.num; ++tid) {
+		g_thread_info.state[tid] = OPERATE_HASH;
+	}
 	tm.Output();
 	return NULL;
 }
@@ -232,13 +302,15 @@ inline bool NotODStart(int& j, char* addr)
 	return false;
 }
 
-inline void ParseCurKey(LogRecord* record, int& j, char* addr)
+inline int ParseCurKey(int& j, char* addr)
 {
+	int key = 0;
 	j += KEY_PREFIX_SIZE;
 	while (addr[j] != ' ' && addr[j] != '\n') {
-		record->curkey = record->curkey*10 - '0' + addr[j++];
+		key = key*10 - '0' + addr[j++];
 	}
 	j++;
+	return key;
 }
 
 inline void ParseHDEL(LogRecord* record, int& j, char* addr)
@@ -274,13 +346,15 @@ inline void ParseHMSET(LogRecord* record, int& j, char* addr)
 	}
 }
 
-inline void ParseRENAME(LogRecord* record, int& j, char* addr)
+inline int ParseRENAME(int& j, char* addr)
 {
+	int key = 0;
 	j += KEY_PREFIX_SIZE;
 	while (addr[j] != '\n') {
-		record->newkey = record->newkey*10 - '0' + addr[j++];
+		key = key*10 - '0' + addr[j++];
 	}
 	j++;
+	return key;
 }
 
 inline void ParseHINCRBY(LogRecord* record, int& j, char* addr)
@@ -317,13 +391,14 @@ void ParseCommand(int tid)
 		}
 		if (g_recivered && j == addr_size) break;
 		while (j < addr_size) {
-			auto timestamp = ParseTimestmp(j, addr);
-			auto optcode = ParseOptcode(j, addr);
+			int64_t timestamp = ParseTimestmp(j, addr);
+			OPTCODE optcode = ParseOptcode(j, addr);
 			if (NotODStart(j, addr)) continue;
 			LogRecord* record = new LogRecord;
 			record->timestamp = timestamp;
 			record->code = optcode;
-			ParseCurKey(record, j, addr);
+			auto time_index = timestamp-g_basic_stamp;
+			record->curkey = ParseCurKey(j, addr);
 			switch (record->code) {
 				case HDEL:
 					ParseHDEL(record, j, addr);
@@ -332,7 +407,9 @@ void ParseCommand(int tid)
 					ParseHMSET(record, j, addr);
 					break;
 				case RENAME:
-					ParseRENAME(record, j, addr);
+					record->newkey = ParseRENAME(j, addr);
+					//g_rename_operation[time_index].cur_key = record->curkey;
+					//g_rename_operation[time_index].new_key = record->newkey;
 					break;
 				case HINCRBY:
 					ParseHINCRBY(record, j, addr);
@@ -340,8 +417,8 @@ void ParseCommand(int tid)
 				default:
 					break;
 			}
-			g_total_record[timestamp-g_basic_stamp] = record;
-			if (timestamp - g_basic_stamp > 60*1000*1000) g_parsedeng = true;
+			g_total_record[time_index] = record;
+			if (time_index > 60*1000*1000) g_parsedeng = true;
 		}
 	}
 	tm.Output();
