@@ -18,7 +18,7 @@
 namespace LogRec
 {
 
-#define MAX_HASH    16000000
+#define MAX_HASH    15001000
 
 #define FIELD_PREFIX        "field_"
 #define FIELD_PREFIX_SIZE   6

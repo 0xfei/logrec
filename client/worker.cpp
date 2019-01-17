@@ -31,6 +31,7 @@ char g_buffer[BLOCK_SIZE] = {0};
 char g_prev_buffer[BLOCK_SIZE] = {0};
 char g_curr_buffer[BLOCK_SIZE*2] = {0};
 
+int g_hashkey_rank[MAX_HASH];
 HashMap g_hashmap;
 
 int64_t g_basic_stamp;
@@ -101,7 +102,8 @@ const int g_worker_slut[] = {10, 10, 11, 11, 12, 12, 13, 13, 14, 14,
 
 const int g_worker_slut_size = sizeof(g_worker_slut)/sizeof(int);
 
-void AddFileWriter(int tid);
+void AddFileWriter(int tid, int start, int dest);
+void AddRankKey(int tid);
 void ParseCommand(int tid);
 
 void* Worker(void* param)
@@ -112,6 +114,8 @@ void* Worker(void* param)
 	ParseCommand(tid);
 	g_thread_info.state[tid] = FINIS_PARS;
 
+    if (tid < g_worker_slut_size) AddRankKey(tid);
+
 	while (!g_execcuted) {
 		usleep(USECONDS);
 	}
@@ -119,7 +123,9 @@ void* Worker(void* param)
 	TimeUsage tm(std::to_string(tid)+"#AddFileWriter");
 	tm.Start();
 
-	if (tid < g_worker_slut_size) AddFileWriter(tid);
+	int block = MAX_HASH/g_thread_info.num;
+	int start = tid*block, dest = (tid+1)*block;
+	AddFileWriter(tid, start, dest);
 
 	tm.Output();
 	return NULL;
@@ -164,40 +170,46 @@ void* Executer(void* param)
 /*
  * Hash worker
  */
-inline void AddToHashmap(int key, int tid)
+void DFSAddRank(int slut, int tid, int& start, int& dest)
 {
-	auto & k = g_hashmap.hash_map[key];
-	if (k != NULL && k->field_num > 0) {
-		k->key = key;
-		g_thread_info.writer[tid].AddRecord(k);
-	}
+    int s = 0, t = 10;
+    if (slut < 20) {
+        if (tid % 2 == 1) {
+            s = 5, t = 10;
+        } else {
+            s = 0, t = 5;
+        }
+    }
+
+    for (auto i = s; i < t; ++i) {
+        auto key = slut*10 + i;
+        if (key >= MAX_HASH) break;
+        if (start >= dest) break;
+        g_hashkey_rank[start++] = key;
+        DFSAddRank(key, tid, start, dest);
+    }
 }
 
-void DFSAddHash(int slut, int tid)
+void AddRankKey(int tid)
 {
-	int s = 0, t = 10;
-	if (slut < 20) {
-		if (tid % 2 == 1) {
-			s = 5, t = 10;
-		} else {
-			s = 0, t = 5;
-		}
-	}
-
-	for (auto i = s; i < t; ++i) {
-		auto key = slut*10 + i;
-		if (key >= MAX_HASH) break;
-		AddToHashmap(key, tid);
-		DFSAddHash(key, tid);
-	}
+    int block = MAX_HASH/g_worker_slut_size;
+    int start = block*tid, dest = block*(tid+1);
+    if (tid == 0) g_hashkey_rank[start++] = 1;
+    int slut = g_worker_slut[tid];
+    if (tid % 2 == 0) g_hashkey_rank[start++] = slut;
+    DFSAddRank(slut, tid, start, dest);
 }
 
-void AddFileWriter(int tid)
+void AddFileWriter(int tid, int start, int dest)
 {
-	if (tid == 0) AddToHashmap(1, tid);
-	int slut = g_worker_slut[tid];
-	if (tid % 2 == 0) AddToHashmap(slut, tid);
-	DFSAddHash(slut, tid);
+    for (int i = start; i < dest; ++i) {
+        int key = g_hashkey_rank[i];
+        auto & k = g_hashmap.hash_map[key];
+        if (k->field_num > 0) {
+            k->key = key;
+            g_thread_info.writer[tid].AddRecord(k);
+        }
+    }
 }
 
 
@@ -311,7 +323,7 @@ void ParseCommand(int tid)
 	char* addr = g_thread_info.data_vec[tid];
 	int addr_size = g_thread_info.data_size[tid];
 	while (true) {
-		while (addr_size - j <= 100 && !g_recivered) {
+		while (j < addr_size && !g_recivered) {
 			usleep(USECONDS);
 			addr_size = g_thread_info.data_size[tid];
 		}
